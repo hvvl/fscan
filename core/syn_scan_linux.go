@@ -583,6 +583,7 @@ func (e *synEngine) Run(ctx context.Context, iter *SocketIterator, inflightCap i
 	e.runSender(ctx, iter, srcCache, inflightCap)
 
 	ph := time.Now().Add(synDrainTime)
+drain:
 	for e.inflightLen() > 0 {
 		if ctx.Err() != nil || time.Now().After(ph) {
 			break
@@ -590,7 +591,7 @@ func (e *synEngine) Run(ctx context.Context, iter *SocketIterator, inflightCap i
 		e.sweep()
 		select {
 		case <-ctx.Done():
-			break
+			break drain
 		case <-time.After(30 * time.Millisecond):
 		}
 	}
