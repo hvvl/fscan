@@ -401,7 +401,7 @@ brute_no_weak_pass:
   other: "{{.Arg1}}:{{.Arg2}} {{.Arg3}} 未发现弱密码"
 
 flag_syn_scan:
-  other: "SYN半开扫描(需root/CAP_NET_RAW, 非支持环境自动回退全连接扫描)"
+  other: "SYN半开扫描(严格模式：环境不满足直接报错退出。Linux需root/CAP_NET_RAW；Windows需Npcap)"
 syn_mode_banner:
   other: "SYN半开扫描模式：端口发现使用raw SYN（不完成三次握手），开放端口再全连接识别服务"
 syn_fallback_connect:
@@ -410,6 +410,21 @@ syn_no_raw:
   other: "SYN模式需要 raw socket 权限(root/CAP_NET_RAW)，已回退全连接扫描"
 syn_progress_label:
   other: "SYN端口扫描中"
+
+syn_err_unsupported:
+  other: "‑syn 模式在当前环境不可用(已中止，未回退)"
+syn_err_platform:
+  other: "当前平台无SYN引擎(仅Linux与Windows/amd64实现)"
+syn_err_proxy:
+  other: "‑syn 与代理模式互斥(用户态代理无法承载raw帧)"
+syn_err_no_cap:
+  other: "无raw socket权限(需要root或CAP_NET_RAW)"
+syn_err_no_npcap:
+  other: "未检测到Npcap驱动(wpcap.dll)。SYN扫描需要Npcap，请从 https://npcap.com 安装"
+syn_err_non_ipv4:
+  other: "目标含无法解析为IPv4的主机: {{.Arg1}}个，示例: {{.Arg2}}(SYN模式要求全部目标均为IPv4可达)"
+syn_err_non_ipv4_empty:
+  other: "无IPv4可达目标(‑syn模式要求至少一个IPv4目标)"
 
 # ========================= 端口扫描消息 =========================
 invalid_port:

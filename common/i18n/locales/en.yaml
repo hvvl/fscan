@@ -1850,7 +1850,7 @@ service_conn_port_failed:
 
 # ========================= SYN scan =========================
 flag_syn_scan:
-  other: "SYN half-open scan (requires root/CAP_NET_RAW, falls back to connect scan otherwise)"
+  other: "SYN half-open scan (strict mode: errors out if unsupported. Linux needs root/CAP_NET_RAW; Windows needs Npcap)"
 syn_mode_banner:
   other: "SYN half-open mode: raw SYN for port discovery (no 3-way handshake completion), full connect only for service identification"
 syn_fallback_connect:
@@ -1859,3 +1859,18 @@ syn_no_raw:
   other: "SYN mode requires raw socket privilege (root/CAP_NET_RAW), falling back to connect scan"
 syn_progress_label:
   other: "SYN port scan in progress"
+
+syn_err_unsupported:
+  other: "-syn mode unavailable in this environment (aborted; no fallback)"
+syn_err_platform:
+  other: "no SYN engine on this platform (implemented for Linux and Windows/amd64 only)"
+syn_err_proxy:
+  other: "-syn is mutually exclusive with proxy mode (user-space proxies cannot carry raw frames)"
+syn_err_no_cap:
+  other: "no raw socket capability (run as root or grant CAP_NET_RAW)"
+syn_err_no_npcap:
+  other: "Npcap driver not detected (wpcap.dll). SYN scan requires Npcap from https://npcap.com"
+syn_err_non_ipv4:
+  other: "{{.Arg1}} target(s) cannot be resolved to IPv4, e.g. {{.Arg2}} (SYN mode requires all targets IPv4-reachable)"
+syn_err_non_ipv4_empty:
+  other: "no IPv4-reachable targets (SYN mode requires at least one IPv4 target)"

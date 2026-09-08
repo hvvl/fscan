@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shadow1ng/fscan/common/i18n"
@@ -25,6 +26,11 @@ type ScanSession struct {
 	Params     *FlagVars  // 原始参数，只读
 	ResultSink ResultSink // 可选，覆盖全局输出
 	PauseGate  func(ctx context.Context) error
+
+	// fatalErr: 致命错误（如 -syn 前置条件不满足）。原子写入一次，
+	// 置位后应尽快结束扫描；RunScan 收尾时向上返回。
+	fatalOnce sync.Once
+	fatalErr  atomic.Pointer[error]
 
 	// 每会话 dialer（按 timeout 懒初始化，取决于代理配置）
 	dialerMu   sync.Mutex
@@ -228,4 +234,25 @@ func (s *ScanSession) createProxyConfig(timeout time.Duration) *proxy.ProxyConfi
 
 	cfg.Type = proxy.ProxyTypeNone
 	return cfg
+}
+
+// SetFatalError 记录致命错误（首个生效），并尽量快地终止后续工作。
+func (s *ScanSession) SetFatalError(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.fatalOnce.Do(func() {
+		s.fatalErr.Store(&err)
+	})
+}
+
+// FatalErr 已置位的致命错误；未置位返回 nil。
+func (s *ScanSession) FatalErr() error {
+	if s == nil {
+		return nil
+	}
+	if p := s.fatalErr.Load(); p != nil {
+		return *p
+	}
+	return nil
 }

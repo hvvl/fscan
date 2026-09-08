@@ -89,8 +89,10 @@ func (s *AliveScanStrategy) performAliveScan(ctx context.Context, info common.Ho
 		hosts, err := iter.NextBatch(ctx, targetHostBatchSize(session.Config))
 		if err != nil {
 			if ctx.Err() != nil {
-				session.LogError(i18n.Tr("global_timeout_exceeded",
-					int(session.Config.GlobalTimeout.Seconds())))
+				if fe := session.FatalErr(); fe == nil {
+					session.LogError(i18n.Tr("global_timeout_exceeded",
+						int(session.Config.GlobalTimeout.Seconds())))
+				}
 				return
 			}
 			session.LogError(i18n.Tr("parse_target_failed", err))

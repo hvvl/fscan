@@ -142,14 +142,25 @@ func (f *failedPortCollector) Count() int {
 // 使用滑动窗口调度 + 自适应线程池 + 流式迭代器
 // stream: 可选，非 nil 时每发现开放端口立即发送 addr，扫描结束后关闭
 func EnhancedPortScan(ctx context.Context, hosts []string, ports string, timeout int64, session *common.ScanSession, stream chan<- string) []string {
-	// SYN 半开模式：端口发现走 raw SYN（closed 端口零完整连接），
-	// 发现的开放端口再全连接进入服务识别，语义等价 nmap -sS + -sV；
-	// raw 不可用（权限/代理/非 IPv4 目标）时自动回退全连接。
-	if synEnabled(session) {
+	// SYN 严格模式：-syn 开启但环境不满足（权限/代理/平台/非IPv4）→
+	// 置 session.FatalErr 并中止，不回退全连接。
+	useSyn, err := synEnabled(session)
+	if err != nil {
+		session.SetFatalError(err)
+		if stream != nil {
+			close(stream)
+		}
+		abortFromCtx(ctx) // 通知上层尽快终止
+		return nil
+	}
+	if useSyn {
 		return synPortScan(ctx, hosts, ports, timeout, session, stream)
 	}
 	return enhancedConnectScan(ctx, hosts, ports, timeout, session, stream)
 }
+
+// abortKey ctx 内携带 Abort 回调的键（RunScan 侧注入，见 scanner.go）
+type abortKey struct{}
 
 // enhancedConnectScan 全连接扫描主路径（原 EnhancedPortScan 主体）
 func enhancedConnectScan(ctx context.Context, hosts []string, ports string, timeout int64, session *common.ScanSession, stream chan<- string) []string {
@@ -581,15 +592,31 @@ func scanSinglePort(ctx context.Context, host string, port int, addr string, ada
 // raw 不可用（权限/代理/平台/非 IPv4 目标）时自动回退到全连接路径。
 // 返回值/stream 语义与 EnhancedPortScan 一致。
 func synPortScan(ctx context.Context, hosts []string, ports string, timeout int64, session *common.ScanSession, stream chan<- string) []string {
-	if !synEnabled(session) {
+	useSyn, err := synEnabled(session)
+	if err != nil || !useSyn {
+		if err != nil {
+			session.SetFatalError(err)
+			if stream != nil {
+				close(stream)
+			}
+			abortFromCtx(ctx)
+			return nil
+		}
 		return enhancedConnectScan(ctx, hosts, ports, timeout, session, stream)
 	}
 	session.LogInfo(i18n.GetText("syn_mode_banner"))
 
-	openAddrs := synPortDiscovery(ctx, hosts, ports, session, true)
+	openAddrs, err2 := synPortDiscovery(ctx, hosts, ports, session, true)
+	if err2 != nil {
+		session.SetFatalError(err2)
+		if stream != nil {
+			close(stream)
+		}
+		abortFromCtx(ctx)
+		return nil
+	}
 	if openAddrs == nil {
-		session.LogInfo(i18n.GetText("syn_fallback_connect"))
-		return enhancedConnectScan(ctx, hosts, ports, timeout, session, stream)
+		openAddrs = []string{} // 空=扫完且无开放端口（合法状态）
 	}
 
 	var wg sync.WaitGroup

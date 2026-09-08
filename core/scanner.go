@@ -104,6 +104,8 @@ func RunScan(ctx context.Context, info common.HostInfo, session *common.ScanSess
 		ctx, cancel = context.WithCancel(ctx)
 	}
 	defer cancel()
+	// SYN 严格模式：致命错误时请求整体中止（EnhancedPortScan → abortFromCtx）
+	ctx = context.WithValue(ctx, abortKey{}, func() { cancel() })
 	state := session.State
 
 	// 设置全局 State（兼容旧代码路径中未传 state 的调用）
@@ -155,6 +157,11 @@ func RunScan(ctx context.Context, info common.HostInfo, session *common.ScanSess
 
 	// 完成扫描
 	finishScan(session)
+	// FatalErr（-syn 环境不满足等）优先报告：它才是 cancel 的根源，
+	// 不能让 context.Canceled 的表象掩盖真实原因。
+	if err := session.FatalErr(); err != nil {
+		return buildScanReport(state, start), err
+	}
 	if err := ctx.Err(); err != nil {
 		return buildScanReport(state, start), err
 	}
