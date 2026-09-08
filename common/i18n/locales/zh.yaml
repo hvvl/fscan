@@ -400,6 +400,17 @@ plugin_scan_error:
 brute_no_weak_pass:
   other: "{{.Arg1}}:{{.Arg2}} {{.Arg3}} 未发现弱密码"
 
+flag_syn_scan:
+  other: "SYN半开扫描(需root/CAP_NET_RAW, 非支持环境自动回退全连接扫描)"
+syn_mode_banner:
+  other: "SYN半开扫描模式：端口发现使用raw SYN（不完成三次握手），开放端口再全连接识别服务"
+syn_fallback_connect:
+  other: "SYN模式不可用，回退全连接扫描"
+syn_no_raw:
+  other: "SYN模式需要 raw socket 权限(root/CAP_NET_RAW)，已回退全连接扫描"
+syn_progress_label:
+  other: "SYN端口扫描中"
+
 # ========================= 端口扫描消息 =========================
 invalid_port:
   other: "无效端口: {{.Arg1}}"

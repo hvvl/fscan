@@ -1847,3 +1847,15 @@ service_no_test_creds:
   other: "No credentials to test"
 service_conn_port_failed:
   other: "Port connection failed: {{.Arg1}}"
+
+# ========================= SYN scan =========================
+flag_syn_scan:
+  other: "SYN half-open scan (requires root/CAP_NET_RAW, falls back to connect scan otherwise)"
+syn_mode_banner:
+  other: "SYN half-open mode: raw SYN for port discovery (no 3-way handshake completion), full connect only for service identification"
+syn_fallback_connect:
+  other: "SYN mode unavailable, falling back to connect scan"
+syn_no_raw:
+  other: "SYN mode requires raw socket privilege (root/CAP_NET_RAW), falling back to connect scan"
+syn_progress_label:
+  other: "SYN port scan in progress"

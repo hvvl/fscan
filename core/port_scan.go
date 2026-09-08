@@ -142,6 +142,17 @@ func (f *failedPortCollector) Count() int {
 // 使用滑动窗口调度 + 自适应线程池 + 流式迭代器
 // stream: 可选，非 nil 时每发现开放端口立即发送 addr，扫描结束后关闭
 func EnhancedPortScan(ctx context.Context, hosts []string, ports string, timeout int64, session *common.ScanSession, stream chan<- string) []string {
+	// SYN 半开模式：端口发现走 raw SYN（closed 端口零完整连接），
+	// 发现的开放端口再全连接进入服务识别，语义等价 nmap -sS + -sV；
+	// raw 不可用（权限/代理/非 IPv4 目标）时自动回退全连接。
+	if synEnabled(session) {
+		return synPortScan(ctx, hosts, ports, timeout, session, stream)
+	}
+	return enhancedConnectScan(ctx, hosts, ports, timeout, session, stream)
+}
+
+// enhancedConnectScan 全连接扫描主路径（原 EnhancedPortScan 主体）
+func enhancedConnectScan(ctx context.Context, hosts []string, ports string, timeout int64, session *common.ScanSession, stream chan<- string) []string {
 	config := session.Config
 	state := session.State
 	session.LogDebug(i18n.Tr("port_scan_debug_start", len(hosts), config.ThreadNum))
@@ -504,7 +515,6 @@ func urlHost(host string) string {
 func scanSinglePort(ctx context.Context, host string, port int, addr string, adaptiveTO *AdaptiveTimeout, metrics *ScanMetrics, count *atomic.Int64, collector *resultCollector, failedCollector *failedPortCollector, session *common.ScanSession) {
 	config := session.Config
 	timeout := adaptiveTO.Timeout()
-	// 步骤1：建立连接
 	start := time.Now()
 	conn, err := connectWithRetry(ctx, session, addr, timeout, 2)
 	if err != nil {
@@ -565,6 +575,127 @@ func scanSinglePort(ctx context.Context, host string, port int, addr string, ada
 	// 步骤4：处理结果
 	processServiceResult(ctx, host, port, addr, serviceInfo, config, session)
 	collector.Add(addr)
+}
+
+// synPortScan SYN 模式完整端口扫描：raw SYN 端口发现 → 对开放端口做一次全连接服务识别。
+// raw 不可用（权限/代理/平台/非 IPv4 目标）时自动回退到全连接路径。
+// 返回值/stream 语义与 EnhancedPortScan 一致。
+func synPortScan(ctx context.Context, hosts []string, ports string, timeout int64, session *common.ScanSession, stream chan<- string) []string {
+	if !synEnabled(session) {
+		return enhancedConnectScan(ctx, hosts, ports, timeout, session, stream)
+	}
+	session.LogInfo(i18n.GetText("syn_mode_banner"))
+
+	openAddrs := synPortDiscovery(ctx, hosts, ports, session, true)
+	if openAddrs == nil {
+		session.LogInfo(i18n.GetText("syn_fallback_connect"))
+		return enhancedConnectScan(ctx, hosts, ports, timeout, session, stream)
+	}
+
+	var wg sync.WaitGroup
+	workers := session.Config.ModuleThreadNum
+	if workers < 1 {
+		workers = 10
+	}
+	if workers > 64 {
+		workers = 64
+	}
+	sem := make(chan struct{}, workers)
+
+	for _, addr := range openAddrs {
+		host, portStr, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		port, _ := strconv.Atoi(portStr)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(host string, port int, addr string) {
+			defer func() { <-sem; wg.Done() }()
+			synIdentifyService(ctx, host, port, addr, time.Duration(timeout)*time.Second, session)
+		}(host, port, addr)
+	}
+	wg.Wait()
+
+	if stream != nil {
+		for _, a := range openAddrs {
+			stream <- a
+		}
+		close(stream)
+	}
+
+	session.LogInfo(i18n.Tr("port_scan_complete", len(openAddrs)))
+	return openAddrs
+}
+
+// synIdentifyService 对 SYN 发现的开放端口做全连接服务识别。
+// 语义与 scanSinglePort 的成功路径严格对齐（步骤2-4：记录开放端口/识别/结果处理）；
+// 差异仅在于连接失败的兜底由「放弃端口」改为「SYN 证词优先，仍记开放」。
+func synIdentifyService(ctx context.Context, host string, port int, addr string, timeout time.Duration, session *common.ScanSession) {
+	config := session.Config
+	start := time.Now()
+	conn, err := connectWithRetry(ctx, session, addr, timeout, 2)
+	if err != nil {
+		// 二次连接失败但 SYN 层已确认开放：raw 证词优先，端口记开放、识别降级空
+		saveOpenPort(session, host, port)
+		processServiceResult(ctx, host, port, addr, nil, config, session)
+		return
+	}
+
+	rtt, serviceInfo, open, connErr := identifyOpenPort(ctx, host, port, addr, conn, err, start, timeout, config, session)
+	if !open {
+		if connErr != nil {
+			// 同上：SYN 证词优先
+			saveOpenPort(session, host, port)
+			processServiceResult(ctx, host, port, addr, nil, config, session)
+		}
+		// connErr==nil 为代理验证不通过的假端口；SYN 模式禁用代理，理论不可达
+		return
+	}
+	_ = rtt
+	// open=true 正常路径（步骤2+4）
+	saveOpenPort(session, host, port)
+	processServiceResult(ctx, host, port, addr, serviceInfo, config, session)
+}
+
+// identifyOpenPort 全连接后的公共识别段（全连接模式与 SYN 模式二次连接共用）：
+// 返回 (rtt, 服务识别结果, 是否开放, 原始连接错误)。
+// open=false 且 connErr=nil 表示连接建立但代理验证不通过（假端口）。
+func identifyOpenPort(ctx context.Context, host string, port int, addr string, conn net.Conn, err error, start time.Time, timeout time.Duration, config *common.Config, session *common.ScanSession) (rtt time.Duration, serviceInfo *ServiceInfo, open bool, connErr error) {
+	if err != nil {
+		return 0, nil, false, err
+	}
+	rtt = time.Since(start)
+
+	// 代理链路深度验证（透明/全回显代理防假连接）
+	valid, verifyMethod := verifyProxyConnectionDeep(conn, addr, session)
+	if !valid {
+		session.LogDebug(i18n.Tr("proxy_verify_failed", addr, verifyMethod))
+		_ = conn.Close()
+		return 0, nil, false, nil
+	}
+
+	// 代理验证可能污染连接状态 → 重建干净连接
+	if session.ProxyEnabled() && verifyMethod != "direct" {
+		_ = conn.Close()
+		conn, err = connectWithRetry(ctx, session, addr, timeout, 2)
+		if err != nil {
+			return 0, nil, false, err
+		}
+	}
+
+	// 服务识别（Scanner 负责关闭连接，含探测中新建连接）
+	scanner := NewSmartPortInfoScanner(ctx, host, port, conn, timeout, config, session)
+	if ms := rtt.Milliseconds(); ms > 0 {
+		maxMS := int(ms) * 6
+		if maxMS < 500 {
+			maxMS = 500
+		}
+		scanner.info.maxReadTimeoutMS = maxMS
+	}
+	defer scanner.Close()
+	serviceInfo, _ = scanner.SmartIdentify()
+	return rtt, serviceInfo, true, nil
 }
 
 // handleConnectionFailure 处理连接失败

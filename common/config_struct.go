@@ -33,6 +33,7 @@ type Config struct {
 	DisablePing             bool          // 禁用Ping检测
 	DisableTcpProbe         bool          // 禁用TCP补充探测
 	DisableSubnetProbe      bool          // 禁用网段预筛
+	SynScan                 bool          // SYN半开扫描（Linux/CAP_NET_RAW，非该环境自动回退全连接）
 
 	// 扫描模式
 	Mode               string // 扫描模式
@@ -204,6 +205,7 @@ func NewConfig() *Config {
 		DisablePing:     false,
 		DisableTcpProbe:    false,
 		DisableSubnetProbe: false,
+		SynScan:        false,
 
 		// 扫描模式
 		Mode:       DefaultScanMode,

@@ -41,6 +41,7 @@ type ScanRequest struct {
 	DisablePing        bool `json:"disable_ping"`
 	DisableBrute       bool `json:"disable_brute"`
 	DisableSubnetProbe bool `json:"disable_subnet_probe"`
+	SynScan           bool `json:"syn_scan"`
 	AliveOnly       bool   `json:"alive_only"`
 
 	// 认证
@@ -201,6 +202,7 @@ func (h *ScanHandler) runScan(req ScanRequest) {
 	fv.DisablePing = req.DisablePing
 	fv.DisableBrute = req.DisableBrute
 	fv.DisableSubnetProbe = req.DisableSubnetProbe
+	fv.SynScan = req.SynScan
 	fv.AliveOnly = req.AliveOnly
 	fv.Username = req.Username
 	fv.Password = req.Password
