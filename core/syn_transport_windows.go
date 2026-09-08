@@ -32,6 +32,7 @@ import (
 	"unsafe"
 
 	"github.com/shadow1ng/fscan/common"
+	"github.com/shadow1ng/fscan/common/i18n"
 )
 
 var (
@@ -463,4 +464,9 @@ func synTransportMakerImpl() (synTransport, uint16, error) {
 func init() {
 	synEnabledHook = synEnabledImpl
 	synTransportMakerHook = synTransportMakerImpl
+}
+
+// synErrNoDriver wpcap.dll（Npcap）不可用（仅 Windows 构建存在——故与调用处同文件）
+func synErrNoDriver(cause error) error {
+	return synErrUnsupported(fmt.Errorf("%s (%v)", i18n.GetText("syn_err_no_npcap"), cause))
 }

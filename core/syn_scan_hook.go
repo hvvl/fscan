@@ -176,10 +176,6 @@ func synErrPermission(cause error) error {
 	return synErrUnsupported(fmt.Errorf("%s (%v)", i18n.GetText("syn_err_no_cap"), cause))
 }
 
-func synErrNoDriver(cause error) error {
-	return synErrUnsupported(fmt.Errorf("%s (%v)", i18n.GetText("syn_err_no_npcap"), cause))
-}
-
 // abortFromCtx 通知 RunScan 注入的 Abort 回调（若有）
 func abortFromCtx(ctx context.Context) {
 	if c, ok := ctx.Value(abortKey{}).(func()); ok {
