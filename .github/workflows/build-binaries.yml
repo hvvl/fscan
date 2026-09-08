@@ -1,0 +1,184 @@
+name: 二进制构建
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '*.md'
+      - '*.txt'
+      - 'README*'
+      - 'LICENSE*'
+      - 'image/**'
+      - 'TestDocker/**'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '*.md'
+      - '*.txt'
+      - 'README*'
+      - 'LICENSE*'
+      - 'image/**'
+      - 'TestDocker/**'
+  workflow_dispatch:
+    inputs:
+      upx:
+        description: 'UPX 压缩二进制'
+        type: boolean
+        default: false
+      go_version:
+        description: 'Go 版本'
+        type: string
+        default: '1.25'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # 第一阶段：lint+test+单平台构建门禁（上游 test-build 的精简版，防回归进 artifact）
+  gate:
+    name: 质量门禁
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      commit: ${{ steps.ver.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: 提取版本与提交
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's/^[[:space:]]*version = "\(.*\)"/\1/p' common/globals.go)
+          if [ -z "$VERSION" ]; then
+            echo "❌ 无法从 common/globals.go 读取版本号"; exit 1
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "commit=${GITHUB_SHA::8}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 下载依赖
+        run: |
+          go mod download
+          go mod verify
+
+      - name: 单元测试（排除 grdp）
+        run: |
+          PKGS=$(go list ./... | grep -v '/libs/grdp/')
+          go test -vet=off $PKGS
+
+      - name: vet
+        run: go vet ./core/ ./common/
+
+      - name: 构建验证 (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /dev/null .
+
+  # 第二阶段：多平台矩阵构建
+  build:
+    name: 构建 ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: "386"
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+          - goos: windows
+            goarch: amd64
+            suffix: .exe
+          - goos: windows
+            goarch: "386"
+            suffix: .exe
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: 构建
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: 0
+        run: |
+          NAME="fscan-${{ needs.gate.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}${{ matrix.suffix || '' }}"
+          OUT="dist/${NAME}"
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/shadow1ng/fscan/common.version=${{ needs.gate.outputs.version }} -X github.com/shadow1ng/fscan/common.commit=${{ needs.gate.outputs.commit }} -X github.com/shadow1ng/fscan/common.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "$OUT" .
+          ls -la dist/
+
+      - name: UPX 压缩（可选，仅 linux amd64/386、windows）
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upx && (matrix.goos != 'darwin') }}
+        uses: crazy-max/ghaction-upx@v3
+        with:
+          version: latest
+          files: |
+            dist/*
+          compress-all: true
+
+      - name: 校验和
+        shell: bash
+        run: |
+          cd dist
+          for f in *; do
+            sha256sum "$f" | awk '{print $1"  "$2}' >> SHA256SUMS
+          done
+          cat SHA256SUMS
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fscan-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
+          path: dist/*
+          retention-days: 30
+          if-no-files-found: error
+
+  summary:
+    name: 汇总
+    needs: [gate, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 产物清单
+        shell: bash
+        run: |
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          # 构建产物汇总
+
+          版本: ${{ needs.gate.outputs.version }}  提交: ${{ needs.gate.outputs.commit }}
+
+          | 平台 | 产物 |
+          |------|------|
+          | Linux (amd64/arm64/386/armv7) | \`fscan-*-linux-*\` — 含 SYN 扫描(\`-syn\`) |
+          | Windows (amd64/386) | \`fscan-*-windows-*.exe\` — 自动回退全连接 |
+          | macOS (amd64/arm64) | \`fscan-*-darwin-*\` — 自动回退全连接 |
+          EOF
